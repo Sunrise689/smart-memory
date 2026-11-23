@@ -1,0 +1,9 @@
+{
+  "index": "~/.smy/index.sqlite",
+  "memory_roots": [
+    {"name": "memory", "path": "~/agent-memory"}
+  ],
+  "raw_roots": [
+    {"name": "agent-sessions", "path": "~/agent-sessions"}
+  ]
+}
