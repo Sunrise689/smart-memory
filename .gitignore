@@ -1,8 +1,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+build/
+dist/
+*.egg-info/
 .smy/
 *.sqlite
 *.sqlite-*
 config.json
 .venv/
+work/

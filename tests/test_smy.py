@@ -6,10 +6,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
+ENV = {"PYTHONPATH": str(ROOT / "src")}
 
 
 def run(*args):
-    return subprocess.run([sys.executable, str(ROOT / "smy.py"), *args], text=True, capture_output=True, check=True)
+    env = dict(__import__("os").environ)
+    env.update(ENV)
+    return subprocess.run([sys.executable, "-m", "smy.cli", *args], cwd=ROOT, env=env, text=True, capture_output=True, check=True)
 
 
 class SMyTests(unittest.TestCase):

@@ -10,12 +10,13 @@ This repository contains only the generic CLI, configuration example, tests, and
 
 ```bash
 python -m pip install .
+smy --help
 ```
 
 Or run without installation:
 
 ```bash
-python smy.py --config ~/.smy/config.json health
+python -m smy.cli --config ~/.smy/config.json health
 ```
 
 Copy `config.example.json` to `~/.smy/config.json` and change the paths. `memory_roots` are durable Markdown/TXT notes that SMY indexes; `raw_roots` are original session directories that remain read-only and are searched only with `--raw`.
@@ -46,7 +47,7 @@ Index output is sanitized for common API keys, bearer tokens, secret assignments
 
 ```bash
 python -m unittest discover -s tests -v
-python -m compileall smy.py
+python -m compileall src tests
 ```
 
-The project intentionally has no runtime dependency beyond Python 3.10+ and SQLite FTS5.
+The project intentionally has no runtime dependency beyond Python 3.10+ and SQLite FTS5. The package exposes the `smy` console command through standard Python packaging. The implementation lives under `src/smy/`, so consumers install and invoke a product entry point rather than depending on a copied script.
