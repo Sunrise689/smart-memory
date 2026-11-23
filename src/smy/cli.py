@@ -25,6 +25,7 @@ SECRET_PATTERNS = (
     re.compile(r'''(?i)(?:api[-_ ]?key|access[-_ ]?token|secret)\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}'''),
     re.compile(r'''(?i)https?://[^\s"']+[?&](?:key|token|secret|api_key)=[^\s"']+'''),
 )
+DEFAULT_STATUSES = ("active", "verified", "baseline", "operating-baseline", "protocol-baseline")
 
 
 def redact(value: Any) -> Any:
@@ -136,13 +137,16 @@ def build_index(config: dict[str, Any], db_path: Path) -> dict[str, Any]:
     return {"db": str(db_path), "docs": count}
 
 
-def search_index(query: str, config: dict[str, Any], top: int, source: str | None = None, layer: str | None = None):
+def search_index(query: str, config: dict[str, Any], top: int, source: str | None = None, layer: str | None = None, statuses: tuple[str, ...] = DEFAULT_STATUSES):
     db_path = Path(config["index"]).expanduser()
     if not db_path.exists():
-        return []
+        return [], {"scanned": 0, "total_files": 0, "truncated": False, "elapsed_ms": 0}
+    started = time.perf_counter()
     con = sqlite3.connect(db_path)
-    clauses = ["docs_fts MATCH ?", "d.status = 'active'"]
+    placeholders = ",".join("?" for _ in statuses)
+    clauses = [f"docs_fts MATCH ?", f"d.status IN ({placeholders})"]
     args: list[Any] = [query]
+    args.extend(statuses)
     if source:
         clauses.append("d.source = ?"); args.append(source)
     if layer:
@@ -153,16 +157,34 @@ def search_index(query: str, config: dict[str, Any], top: int, source: str | Non
         rows = con.execute(sql, args).fetchall()
     except sqlite3.OperationalError:
         rows = []
+    count_clauses = [f"d.status IN ({placeholders})"]
+    count_args = list(statuses)
+    if source:
+        count_clauses.append("d.source = ?"); count_args.append(source)
+    if layer:
+        count_clauses.append("d.layer = ?"); count_args.append(layer)
+    count_sql = "SELECT COUNT(*) FROM docs d WHERE " + " AND ".join(count_clauses)
+    try:
+        total_files = con.execute(count_sql, count_args).fetchone()[0]
+    except sqlite3.OperationalError:
+        total_files = 0
     con.close()
-    return [{"path": redact(r[0]), "source": r[1], "layer": r[2], "title": redact(r[3]), "snippet": redact(r[4])} for r in rows]
+    diagnostics = {"scanned": total_files, "total_files": total_files, "truncated": False, "elapsed_ms": round((time.perf_counter() - started) * 1000)}
+    return [{"path": redact(r[0]), "source": r[1], "layer": r[2], "title": redact(r[3]), "snippet": redact(r[4])} for r in rows], diagnostics
 
 
-def raw_search(query: str, config: dict[str, Any], top: int, source: str | None = None):
+def raw_search(query: str, config: dict[str, Any], top: int, source: str | None = None, seconds: float = 8, scan_all: bool = False):
     needle = query.casefold()
     rows = []
-    for name, path in iter_files(config.get("raw_roots", [])):
+    files = list(iter_files(config.get("raw_roots", [])))
+    started = time.perf_counter()
+    truncated = False
+    for index, (name, path) in enumerate(files, start=1):
         if source and name != source:
             continue
+        if time.perf_counter() - started >= seconds:
+            truncated = True
+            break
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -171,14 +193,21 @@ def raw_search(query: str, config: dict[str, Any], top: int, source: str | None 
         if pos >= 0:
             start = max(0, pos - 180)
             rows.append({"path": redact(str(path)), "source": name, "role": "raw", "snippet": redact(text[start:pos + len(query) + 220].replace("\n", " "))})
-            if len(rows) >= top:
-                break
-    return rows
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    diagnostics = {"scanned": index if files else 0, "total_files": len(files), "truncated": truncated, "elapsed_ms": elapsed_ms}
+    return rows[:top], diagnostics
 
 
-def print_rows(rows, as_json: bool):
+def print_rows(rows, as_json: bool, diagnostics: dict[str, Any] | None = None):
+    diagnostics = diagnostics or {"scanned": 0, "total_files": 0, "truncated": False, "elapsed_ms": 0}
+    if as_json and not rows:
+        print(json.dumps({"record_type": "meta", **diagnostics}, ensure_ascii=False))
+        return
     for row in rows:
-        print(json.dumps(redact_obj(row), ensure_ascii=False) if as_json else f"[{row.get('source','raw')}] {row.get('title', row.get('path',''))}\n  {row.get('path','')}\n  …{row.get('snippet','')}…")
+        enriched = {**row, **diagnostics}
+        print(json.dumps(redact_obj(enriched), ensure_ascii=False) if as_json else f"[{row.get('source','raw')}] {row.get('title', row.get('path',''))}\n  {row.get('path','')}\n  …{row.get('snippet','')}…")
+    if not as_json and diagnostics.get("truncated"):
+        print(f"[scan] truncated after {diagnostics['scanned']}/{diagnostics['total_files']} files")
 
 
 def main(argv=None):
@@ -186,7 +215,7 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, default=default_config_path())
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("index"); p.add_argument("--db", type=Path)
-    p = sub.add_parser("search"); p.add_argument("query"); p.add_argument("--top", type=int, default=5); p.add_argument("--source"); p.add_argument("--layer"); p.add_argument("--raw", action="store_true"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("search"); p.add_argument("query"); p.add_argument("--top", type=int, default=5); p.add_argument("--seconds", type=float, default=8); p.add_argument("--source"); p.add_argument("--layer"); p.add_argument("--status", action="append"); p.add_argument("--raw", action="store_true"); p.add_argument("--scan-all", action="store_true"); p.add_argument("--json", action="store_true")
     sub.add_parser("health")
     sub.add_parser("sources")
     args = parser.parse_args(argv)
@@ -195,8 +224,12 @@ def main(argv=None):
         if args.db: config["index"] = str(args.db)
         print(json.dumps(build_index(config, Path(config["index"]).expanduser()), ensure_ascii=False))
     elif args.command == "search":
-        rows = raw_search(args.query, config, args.top, args.source) if args.raw else search_index(args.query, config, args.top, args.source, args.layer)
-        print_rows(rows, args.json)
+        if args.raw:
+            rows, diagnostics = raw_search(args.query, config, args.top, args.source, args.seconds, args.scan_all)
+        else:
+            statuses = tuple(args.status) if args.status else DEFAULT_STATUSES
+            rows, diagnostics = search_index(args.query, config, args.top, args.source, args.layer, statuses)
+        print_rows(rows, args.json, diagnostics)
     elif args.command == "health":
         print(json.dumps({"config": str(args.config), "index": str(Path(config["index"]).expanduser()), "index_exists": Path(config["index"]).expanduser().exists(), "memory_roots": len(config["memory_roots"]), "raw_roots": len(config["raw_roots"])}, ensure_ascii=False))
     elif args.command == "sources":

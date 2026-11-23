@@ -29,7 +29,7 @@ Choose the path your actual agent can execute:
 - Agents that support MCP may wrap this CLI with a local MCP adapter, but MCP is optional; the stable contract is the CLI and JSON output.
 - Agents with a native tool/skill system can expose the same command as a read-only memory tool.
 
-Put the chosen SMY entry point in that agent's system prompt or equivalent startup instructions. Tell the agent to search before answering memory-dependent questions, read returned paths when needed, and say explicitly when no memory hit exists. The CLI is an interoperability layer, not a claim that every agent automatically shares context.
+Put the chosen SMY entry point in that agent's system prompt or equivalent startup instructions. Start with a normal search, inspect the diagnostic fields, and retry with `--scan-all` when the result is truncated, insufficient, or contradictory. Continue searching until the result supports the next action. Say explicitly when no memory hit exists. The CLI is an interoperability layer, not a claim that every agent automatically shares context.
 
 ## Commands
 
@@ -37,6 +37,8 @@ Put the chosen SMY entry point in that agent's system prompt or equivalent start
 smy --config ~/.smy/config.json index
 smy --config ~/.smy/config.json search "deployment workflow" --json
 smy --config ~/.smy/config.json search "deployment workflow" --raw --json
+smy --config ~/.smy/config.json search "deployment workflow" --raw --scan-all --json
+smy --config ~/.smy/config.json search "deployment workflow" --status verified --json
 smy --config ~/.smy/config.json health
 smy --config ~/.smy/config.json sources
 ```
@@ -50,4 +52,4 @@ python -m unittest discover -s tests -v
 python -m compileall src tests
 ```
 
-The project intentionally has no runtime dependency beyond Python 3.10+ and SQLite FTS5. The package exposes the `smy` console command through standard Python packaging. The implementation lives under `src/smy/`, so consumers install and invoke a product entry point rather than depending on a copied script.
+JSON search results include `scanned`, `total_files`, `truncated`, and `elapsed_ms`. The default index search includes active and verified baseline states. The project intentionally has no runtime dependency beyond Python 3.10+ and SQLite FTS5. The package exposes the `smy` console command through standard Python packaging. The implementation lives under `src/smy/`, so consumers install and invoke a product entry point rather than depending on a copied script.

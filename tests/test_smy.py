@@ -42,6 +42,27 @@ class SMyTests(unittest.TestCase):
             data = json.loads(run("--config", str(config), "health").stdout)
             self.assertFalse(data["index_exists"])
 
+    def test_scan_diagnostics_and_verified_status(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            memory = tmp_path / "memory"; raw = tmp_path / "raw"; memory.mkdir(); raw.mkdir()
+            (memory / "verified.md").write_text("---\nstatus: verified\n---\n# Verified memory\nimportant fact", encoding="utf-8")
+            (memory / "candidate.md").write_text("---\nstatus: candidate\n---\n# Candidate memory\nimportant fact", encoding="utf-8")
+            (raw / "01-assist.txt").write_text("auxiliary phrase", encoding="utf-8")
+            (raw / "02-primary.txt").write_text("primary phrase", encoding="utf-8")
+            config = tmp_path / "config.json"
+            config.write_text(json.dumps({"index": str(tmp_path / "index.sqlite"), "memory_roots": [{"name": "memory", "path": str(memory)}], "raw_roots": [{"name": "raw", "path": str(raw)}]}), encoding="utf-8")
+            run("--config", str(config), "index")
+            verified = [json.loads(line) for line in run("--config", str(config), "search", "important fact", "--json").stdout.splitlines()]
+            self.assertEqual(verified[0]["source"], "memory")
+            strict = run("--config", str(config), "search", "important fact", "--status", "candidate", "--json")
+            self.assertEqual(json.loads(strict.stdout)["title"], "Candidate memory")
+            raw_result = [json.loads(line) for line in run("--config", str(config), "search", "primary phrase", "--raw", "--scan-all", "--json").stdout.splitlines()]
+            self.assertEqual(raw_result[0]["source"], "raw")
+            self.assertIn("scanned", raw_result[0])
+            self.assertFalse(raw_result[0]["truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()
